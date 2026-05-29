@@ -1,0 +1,91 @@
+{
+	"name": "open-webui-vscode",
+	"displayName": "Open WebUI Agent",
+	"description": "VS Code chat extension that reuses Open WebUI APIs, history, tools, knowledge, and model routing.",
+	"version": "0.0.1",
+	"publisher": "open-webui",
+	"private": true,
+	"engines": {
+		"vscode": "^1.92.0",
+		"node": ">=18.13.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onCommand:openWebuiAgent.openChat",
+		"onView:openWebuiAgent.chat"
+	],
+	"main": "./dist/extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "openWebuiAgent.openChat",
+				"title": "Open WebUI Agent: Open Chat"
+			},
+			{
+				"command": "openWebuiAgent.signOut",
+				"title": "Open WebUI Agent: Sign Out"
+			}
+		],
+		"configuration": {
+			"title": "Open WebUI Agent",
+			"properties": {
+				"openWebuiAgent.baseUrl": {
+					"type": "string",
+					"default": "http://localhost:8080",
+					"description": "Base URL for the Open WebUI server."
+				},
+				"openWebuiAgent.defaultModel": {
+					"type": "string",
+					"default": "",
+					"description": "Optional model id to preselect in new chats."
+				},
+				"openWebuiAgent.enableWorkspaceTools": {
+					"type": "boolean",
+					"default": true,
+					"description": "Expose VS Code workspace tool metadata to Open WebUI chat requests."
+				}
+			}
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "openWebuiAgent",
+					"title": "Open WebUI",
+					"icon": "media/icon.svg"
+				}
+			]
+		},
+		"views": {
+			"openWebuiAgent": [
+				{
+					"id": "openWebuiAgent.chat",
+					"name": "Chat",
+					"type": "webview"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"build": "npm run build:webview && npm run compile",
+		"build:webview": "vite build",
+		"compile": "tsc -p ./tsconfig.json",
+		"watch": "npm run build:webview -- --watch & tsc -watch -p ./tsconfig.json",
+		"check": "tsc -p ./tsconfig.json --noEmit && vite build"
+	},
+	"dependencies": {
+		"@sveltejs/vite-plugin-svelte": "^4.0.0",
+		"socket.io-client": "^4.2.0",
+		"svelte": "^5.53.10",
+		"uuid": "^9.0.1",
+		"vite": "^5.4.21"
+	},
+	"devDependencies": {
+		"@types/node": "^20.11.30",
+		"@types/uuid": "^9.0.8",
+		"@types/vscode": "^1.92.0",
+		"typescript": "^5.5.4"
+	},
+	"type": "module"
+}
