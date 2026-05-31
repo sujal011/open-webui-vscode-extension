@@ -26,6 +26,10 @@
 			{
 				"command": "openWebuiAgent.signOut",
 				"title": "Open WebUI Agent: Sign Out"
+			},
+			{
+				"command": "openWebuiAgent.showLogs",
+				"title": "Open WebUI Agent: Show Logs"
 			}
 		],
 		"configuration": {

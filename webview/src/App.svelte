@@ -29,6 +29,7 @@
 	const post = (message: Record<string, unknown>) => vscode.postMessage(message);
 
 	onMount(() => {
+		console.log('[Open WebUI Agent Webview] mounted');
 		window.addEventListener('message', (event) => handleHostMessage(event.data));
 		post({ type: 'ready' });
 	});
