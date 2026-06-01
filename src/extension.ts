@@ -192,6 +192,18 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
+	/**
+	 * Extract tool call information from raw chat response.
+	 * Maps Open WebUI socket events to tool call metadata.
+	 */
+	private extractToolCallInfo(rawData: any) {
+		return {
+			statusHistory: rawData?.statusHistory ?? [],
+			codeExecutions: rawData?.code_executions ?? [],
+			sources: rawData?.sources ?? []
+		};
+	}
+
 	private async sendMessage(message: Extract<WebviewMessage, { type: 'sendMessage' }>) {
 		if (!this.client) {
 			throw new Error('Not signed in.');

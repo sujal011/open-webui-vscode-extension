@@ -1,5 +1,7 @@
 <script lang="ts">
 	import Markdown from './Markdown.svelte';
+	import StatusHistory from './StatusHistory.svelte';
+	import CodeExecutions from './CodeExecutions.svelte';
 
 	export let messages: any[] = [];
 	export let loading: boolean = false;
@@ -53,14 +55,28 @@
 		{#each messages as message (message.id)}
 			<article class="flex gap-3 max-w-full {message.role === 'user' ? 'justify-end' : 'justify-start'}">
 				<div
-					class="max-w-lg px-4 py-2.5 rounded-lg {message.role === 'user'
-						? 'bg-button-bg text-button-fg rounded-br-none'
-						: 'bg-list-hover-bg text-foreground rounded-bl-none'}"
+					class="max-w-lg {message.role === 'user'
+						? 'px-4 py-2.5 rounded-lg bg-button-bg text-button-fg rounded-br-none'
+						: 'w-full max-w-2xl'}"
 				>
 					{#if message.role === 'assistant'}
-						<Markdown content={messageText(message.content)} />
+						<!-- Tool Call Status/Execution Display -->
+						{#if message.statusHistory && message.statusHistory.length > 0}
+							<StatusHistory statusHistory={message.statusHistory} />
+						{/if}
+
+						{#if message.code_executions && message.code_executions.length > 0}
+							<CodeExecutions codeExecutions={message.code_executions} />
+						{/if}
+
+						<!-- Message Content -->
+						<div class="px-4 py-2.5 rounded-lg bg-list-hover-bg text-foreground rounded-bl-none">
+							<Markdown content={messageText(message.content)} />
+						</div>
 					{:else}
-						<p class="text-sm whitespace-pre-wrap break-words">{messageText(message.content)}</p>
+						<div class="px-4 py-2.5 rounded-lg bg-button-bg text-button-fg rounded-br-none">
+							<p class="text-sm whitespace-pre-wrap break-words">{messageText(message.content)}</p>
+						</div>
 					{/if}
 				</div>
 			</article>
