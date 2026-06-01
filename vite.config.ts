@@ -16,7 +16,7 @@ export default defineConfig({
 		}
 	},
 	css: {
-		postcss: { plugins: [] }
+		postcss: './postcss.config.cjs'
 	},
 	build: {
 		outDir: fileURLToPath(new URL('./dist/webview', import.meta.url)),

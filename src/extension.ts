@@ -4,6 +4,8 @@ import {
 	ChatCompletionRequest,
 	ChatMessage,
 	OpenWebuiClient,
+	OpenWebuiChatDetail,
+	OpenWebuiChatHistory,
 	OpenWebuiModel,
 	OpenWebuiSocketEvent
 } from './openWebuiClient.js';
@@ -14,8 +16,9 @@ const output = vscode.window.createOutputChannel('Open WebUI Agent');
 
 type WebviewMessage =
 	| { type: 'ready' }
-	| { type: 'signIn'; email: string; password: string }
+	| { type: 'signIn'; email: string; password: string; baseUrl?: string }
 	| { type: 'refresh' }
+	| { type: 'selectChat'; chatId: string }
 	| { type: 'sendMessage'; content: string; model: string; chatId?: string; parentId?: string | null };
 
 export function activate(context: vscode.ExtensionContext) {
@@ -75,7 +78,7 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 		log('Resetting Open WebUI session.');
 		this.client?.disconnectSocket();
 		this.client = null;
-		this.post({ type: 'signedOut' });
+		this.post({ type: 'signedOut', baseUrl: this.baseUrl });
 	}
 
 	private async handleMessage(message: WebviewMessage) {
@@ -86,12 +89,17 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (message.type === 'signIn') {
-				await this.signIn(message.email, message.password);
+				await this.signIn(message.email, message.password, message.baseUrl);
 				return;
 			}
 
 			if (message.type === 'refresh') {
 				await this.refreshState();
+				return;
+			}
+
+			if (message.type === 'selectChat') {
+				await this.loadChat(message.chatId);
 				return;
 			}
 
@@ -105,6 +113,8 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 
 	private async bootstrap() {
 		log('Bootstrapping webview state.');
+		this.post({ type: 'config', baseUrl: this.baseUrl });
+
 		const token = await this.context.secrets.get(TOKEN_SECRET_KEY);
 		if (!token) {
 			log('No saved token found. Showing signed-out state.');
@@ -118,7 +128,8 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 		this.client.connectSocket();
 	}
 
-	private async signIn(email: string, password: string) {
+	private async signIn(email: string, password: string, baseUrl?: string) {
+		await this.updateBaseUrl(baseUrl);
 		log(`Signing in to ${this.baseUrl} as ${email}.`);
 		this.client = this.createClient('');
 		const user = await this.client.signIn(email, password);
@@ -153,6 +164,31 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 			models,
 			chats,
 			workspaceTools: getWorkspaceToolDescriptors()
+		});
+	}
+
+	private async loadChat(chatId: string) {
+		if (!this.client) {
+			throw new Error('Not signed in.');
+		}
+
+		if (!chatId) {
+			this.post({ type: 'chatLoaded', chatId: '', title: 'New Chat', messages: [], parentId: null });
+			return;
+		}
+
+		log(`Loading chat history: ${chatId}.`);
+		const chat = await this.client.getChat(chatId);
+		const messages = flattenChatMessages(chat);
+		const parentId = messages.at(-1)?.id ?? null;
+		log(`Loaded chat ${chatId}. Messages: ${messages.length}.`);
+		this.post({
+			type: 'chatLoaded',
+			chatId,
+			title: chat.chat?.title ?? chat.title,
+			models: chat.chat?.models ?? [],
+			messages,
+			parentId
 		});
 	}
 
@@ -198,6 +234,17 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 				follow_up_generation: true
 			}
 		} as ChatCompletionRequest;
+
+		if (message.chatId) {
+			const chat = await this.client.getChat(message.chatId);
+			const contextMessages = flattenChatMessages(chat)
+				.filter((item) => item.role === 'system' || item.role === 'user' || item.role === 'assistant')
+				.map((item) => ({
+					role: item.role,
+					content: normalizeMessageContent(item.content)
+				}));
+			body.messages = [...contextMessages, { role: 'user', content: message.content }];
+		}
 
 		this.post({
 			type: 'messageStarted',
@@ -249,6 +296,22 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 			.replace(/\/$/, '');
 	}
 
+	private async updateBaseUrl(baseUrl?: string) {
+		const normalized = baseUrl?.trim().replace(/\/$/, '');
+		if (!normalized || normalized === this.baseUrl) {
+			return;
+		}
+
+		if (!/^https?:\/\//i.test(normalized)) {
+			throw new Error('Server URL must start with http:// or https://.');
+		}
+
+		log(`Updating Open WebUI base URL to ${normalized}.`);
+		await vscode.workspace
+			.getConfiguration('openWebuiAgent')
+			.update('baseUrl', normalized, vscode.ConfigurationTarget.Global);
+	}
+
 	private post(payload: Record<string, unknown>) {
 		log(`Posting message to webview: ${String(payload.type)}`);
 		void this.view?.webview.postMessage(payload);
@@ -257,7 +320,7 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 	private postError(error: unknown) {
 		const message = error instanceof Error ? error.message : String(error);
 		log(`Error: ${message}`);
-		this.post({ type: 'error', message });
+		this.post({ type: 'error', message, baseUrl: this.baseUrl });
 	}
 
 	private getHtml(webview: vscode.Webview) {
@@ -291,4 +354,50 @@ function log(message: string) {
 	const line = `[${new Date().toISOString()}] ${message}`;
 	output.appendLine(line);
 	console.log(`[Open WebUI Agent] ${message}`);
+}
+
+function flattenChatMessages(chat: OpenWebuiChatDetail): ChatMessage[] {
+	const history = chat.chat?.history;
+	if (history?.messages && Object.keys(history.messages).length > 0) {
+		return createMessagesList(history, history.currentId);
+	}
+
+	return chat.chat?.messages ?? [];
+}
+
+function createMessagesList(history: OpenWebuiChatHistory, messageId: string | null): ChatMessage[] {
+	const messages: ChatMessage[] = [];
+	const visited = new Set<string>();
+	let currentId = messageId;
+
+	while (currentId && !visited.has(currentId)) {
+		const message = history.messages[currentId];
+		if (!message) {
+			break;
+		}
+		visited.add(currentId);
+		messages.unshift(message);
+		currentId = message.parentId ?? null;
+	}
+
+	return messages;
+}
+
+function normalizeMessageContent(content: ChatMessage['content']): string {
+	if (typeof content === 'string') {
+		return content;
+	}
+
+	return content
+		.map((part) => {
+			if (typeof part.text === 'string') {
+				return part.text;
+			}
+			if (typeof part.content === 'string') {
+				return part.content;
+			}
+			return '';
+		})
+		.filter(Boolean)
+		.join('\n');
 }

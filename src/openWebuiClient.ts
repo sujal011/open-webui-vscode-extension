@@ -31,13 +31,32 @@ export type OpenWebuiChatSummary = {
 export type ChatMessage = {
 	id: string;
 	role: 'system' | 'user' | 'assistant';
-	content: string;
+	content: string | Array<Record<string, unknown>>;
 	parentId?: string | null;
 	childrenIds?: string[];
 	model?: string;
 	done?: boolean;
 	timestamp?: number;
 	files?: unknown[];
+	models?: string[];
+	error?: unknown;
+};
+
+export type OpenWebuiChatHistory = {
+	messages: Record<string, ChatMessage>;
+	currentId: string | null;
+};
+
+export type OpenWebuiChatDetail = OpenWebuiChatSummary & {
+	chat?: {
+		id?: string;
+		title?: string;
+		models?: string[];
+		history?: OpenWebuiChatHistory;
+		messages?: ChatMessage[];
+		params?: Record<string, unknown>;
+		files?: unknown[];
+	};
 };
 
 export type ChatCompletionRequest = {
@@ -108,6 +127,10 @@ export class OpenWebuiClient extends EventEmitter {
 		return this.request<OpenWebuiChatSummary[]>(`/api/v1/chats/?page=${page}`);
 	}
 
+	async getChat(id: string): Promise<OpenWebuiChatDetail> {
+		return this.request<OpenWebuiChatDetail>(`/api/v1/chats/${encodeURIComponent(id)}`);
+	}
+
 	async sendChatCompletion(body: ChatCompletionRequest): Promise<Record<string, unknown>> {
 		return this.request<Record<string, unknown>>('/api/chat/completions', {
 			method: 'POST',
@@ -131,6 +154,7 @@ export class OpenWebuiClient extends EventEmitter {
 
 		this.socket.on('connect', () => {
 			this.emit('socket:connect', { socketId: this.socket?.id });
+			this.socket?.emit('user-join', { auth: { token: this.token } });
 			this.startHeartbeat();
 		});
 
@@ -182,9 +206,13 @@ export class OpenWebuiClient extends EventEmitter {
 			headers.set('Authorization', `Bearer ${this.token}`);
 		}
 
-		const response = await fetch(`${this.baseUrl}${path}`, {
+		const url = `${this.baseUrl}${path}`;
+		const response = await fetch(url, {
 			...options,
 			headers
+		}).catch((error: unknown) => {
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new Error(`Could not reach Open WebUI at ${this.baseUrl}. ${detail}`);
 		});
 
 		if (!response.ok) {
