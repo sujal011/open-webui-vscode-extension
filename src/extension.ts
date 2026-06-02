@@ -14,12 +14,27 @@ import { getWorkspaceToolDescriptors } from './workspaceTools.js';
 const TOKEN_SECRET_KEY = 'openWebuiAgent.token';
 const output = vscode.window.createOutputChannel('Open WebUI Agent');
 
+const STORAGE_PREFIX = 'openWebuiAgent.storage.';
+
 type WebviewMessage =
 	| { type: 'ready' }
 	| { type: 'signIn'; email: string; password: string; baseUrl?: string }
 	| { type: 'refresh' }
 	| { type: 'selectChat'; chatId: string }
-	| { type: 'sendMessage'; content: string; model: string; chatId?: string; parentId?: string | null };
+	| {
+			type: 'sendMessage';
+			content: string;
+			model: string;
+			modelItem?: OpenWebuiModel;
+			chatId?: string;
+			parentId?: string | null;
+	  }
+	| { type: 'compat:getStorage'; key: string; requestId: string }
+	| { type: 'compat:setStorage'; key: string; value: string | null; requestId: string }
+	| { type: 'auth:getToken'; requestId: string }
+	| { type: 'auth:setToken'; token: string; requestId: string }
+	| { type: 'auth:clearToken'; requestId: string }
+	| { type: 'workspace:openFile'; path: string };
 
 export function activate(context: vscode.ExtensionContext) {
 	log('Activating extension.');
@@ -40,7 +55,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('openWebuiAgent.signOut', async () => {
 			log('Sign out command invoked.');
 			await context.secrets.delete(TOKEN_SECRET_KEY);
-			provider.resetSession();
+			await provider.resetSession();
 			vscode.window.showInformationMessage('Signed out of Open WebUI Agent.');
 		})
 	);
@@ -83,6 +98,66 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 
 	private async handleMessage(message: WebviewMessage) {
 		try {
+			if (message.type === 'compat:getStorage') {
+				const value = await this.context.globalState.get<string>(`${STORAGE_PREFIX}${message.key}`);
+				this.post({
+					type: 'compat:storage',
+					requestId: message.requestId,
+					key: message.key,
+					value: value ?? null
+				});
+				return;
+			}
+
+			if (message.type === 'compat:setStorage') {
+				const storageKey = `${STORAGE_PREFIX}${message.key}`;
+				if (message.value === null) {
+					await this.context.globalState.update(storageKey, () => undefined);
+				} else {
+					await this.context.globalState.update(storageKey, () => message.value!);
+				}
+				this.post({
+					type: 'compat:storage',
+					requestId: message.requestId,
+					key: message.key,
+					value: message.value
+				});
+				return;
+			}
+
+			if (message.type === 'auth:getToken') {
+				const token = await this.context.secrets.get(TOKEN_SECRET_KEY);
+				this.post({ type: 'auth:token', requestId: message.requestId, token: token ?? null });
+				return;
+			}
+
+			if (message.type === 'auth:setToken') {
+				await this.context.secrets.store(TOKEN_SECRET_KEY, message.token);
+				if (!this.client) {
+					this.client = this.createClient(message.token);
+				} else {
+					this.client.setToken(message.token);
+				}
+				await this.refreshModelsCache();
+				this.post({ type: 'auth:token', requestId: message.requestId, token: message.token });
+				return;
+			}
+
+			if (message.type === 'auth:clearToken') {
+				await this.context.secrets.delete(TOKEN_SECRET_KEY);
+				this.client?.disconnectSocket();
+				this.client = null;
+				this.post({ type: 'auth:token', requestId: message.requestId, token: null });
+				return;
+			}
+
+			if (message.type === 'workspace:openFile') {
+				const uri = vscode.Uri.file(message.path);
+				const document = await vscode.workspace.openTextDocument(uri);
+				await vscode.window.showTextDocument(document);
+				return;
+			}
+
 			if (message.type === 'ready') {
 				await this.bootstrap();
 				return;
@@ -112,8 +187,22 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async bootstrap() {
-		log('Bootstrapping webview state.');
-		this.post({ type: 'config', baseUrl: this.baseUrl });
+		log('Bootstrapping webview compat layer.');
+		this.post({
+			type: 'config',
+			baseUrl: this.baseUrl,
+			features: {
+				chat: true,
+				sidebar: true,
+				settings: true,
+				workspace: false,
+				admin: false,
+				notes: false,
+				channels: false,
+				pyodide: false,
+				terminals: false
+			}
+		});
 
 		const token = await this.context.secrets.get(TOKEN_SECRET_KEY);
 		if (!token) {
@@ -122,10 +211,9 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		log('Saved token found. Creating Open WebUI client.');
+		log('Saved token found. Host client ready for workspace chat actions.');
 		this.client = this.createClient(token);
-		await this.refreshState();
-		this.client.connectSocket();
+		await this.refreshModelsCache();
 	}
 
 	private async signIn(email: string, password: string, baseUrl?: string) {
@@ -138,9 +226,7 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 		}
 		await this.context.secrets.store(TOKEN_SECRET_KEY, user.token);
 		this.client.setToken(user.token);
-		await this.refreshState();
-		this.client.connectSocket();
-		log('Sign-in completed.');
+		log('Sign-in completed. Webview loads session via Open WebUI APIs.');
 	}
 
 	private async refreshState() {
@@ -204,16 +290,51 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 		};
 	}
 
+	private async refreshModelsCache() {
+		if (!this.client) {
+			return;
+		}
+		try {
+			this.models = await this.client.getModels();
+			log(`Cached ${this.models.length} models on extension host.`);
+		} catch (error) {
+			log(`Failed to cache models: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private async resolveModel(
+		modelId: string,
+		modelItem?: OpenWebuiModel
+	): Promise<OpenWebuiModel> {
+		let model = this.models.find((item) => item.id === modelId);
+		if (model) {
+			return model;
+		}
+
+		if (modelItem?.id === modelId) {
+			this.models = [...this.models, modelItem];
+			return modelItem;
+		}
+
+		if (!this.client) {
+			throw new Error('Not signed in.');
+		}
+
+		this.models = await this.client.getModels();
+		model = this.models.find((item) => item.id === modelId);
+		if (!model) {
+			throw new Error(`Model "${modelId}" is not available on this server.`);
+		}
+		return model;
+	}
+
 	private async sendMessage(message: Extract<WebviewMessage, { type: 'sendMessage' }>) {
 		if (!this.client) {
 			throw new Error('Not signed in.');
 		}
 
 		log(`Sending chat message. Chat: ${message.chatId || 'new'}. Model: ${message.model}.`);
-		const model = this.models.find((item) => item.id === message.model);
-		if (!model) {
-			throw new Error('Select a valid model before sending.');
-		}
+		const model = await this.resolveModel(message.model, message.modelItem);
 
 		const userMessageId = uuidv4();
 		const assistantMessageId = uuidv4();
@@ -350,7 +471,7 @@ class OpenWebuiChatProvider implements vscode.WebviewViewProvider {
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} https: data:;" />
+		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} https: data:; connect-src ${webview.cspSource} http: https: ws: wss:; font-src ${webview.cspSource} https: data:;" />
 		<link rel="stylesheet" href="${styleUri}" />
 		<title>Open WebUI Agent</title>
 	</head>

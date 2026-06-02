@@ -8,6 +8,8 @@ This project is a VS Code extension that reuses Open WebUI as the backend for au
 - `src/openWebuiClient.ts` is the portable Open WebUI API/socket client. Keep this free of VS Code imports so it can later move to a shared package.
 - `src/workspaceTools.ts` contains editor tool descriptors and safe wrappers around VS Code workspace APIs.
 - `webview/src` is the Svelte UI. Treat it as an untrusted renderer: it sends intents to the extension host and receives state/events back.
+- `webview/src/compat/` is the single VS Code compatibility layer (storage, SvelteKit shims, API bootstrap, socket). Do not scatter `vscode` checks through vendored Open WebUI files.
+- `webview/vendor/open-webui/` is a synced copy of `open-webui/src/lib` (run `npm run sync:ui`). It is gitignored; CI/build must sync before `vite build`.
 
 ## Open WebUI API Contract
 
@@ -49,7 +51,10 @@ When working in this extension project:
 - Read this file and the existing source before changing architecture.
 - Keep Open WebUI compatibility first. Do not invent replacement chat protocols unless the server API cannot support the need.
 - Keep portable code separate from VS Code-specific code.
-- Prefer narrow, testable changes. Avoid moving Open WebUI frontend files wholesale until the extension shell is stable.
+- Prefer narrow, testable changes. Vendored UI is synced via `npm run sync:ui`; Phase 3+ mounts Open WebUI chat components behind `$compat`.
+- Webview bootstrap uses Open WebUI `$lib/stores` and `$lib/apis/{auths,chats,users}` with `$compat/apis-bootstrap` for heavy `apis/index` imports.
+- Signed-in UI is `webview/src/shell/OpenWebuiShell.svelte` (Open WebUI `Sidebar` + `Chat`). Auth is `shell/AuthScreen.svelte`.
+- Tailwind v4 + Open WebUI gray theme: `webview/src/tailwind.css`. Run `npm run build` before testing in Extension Development Host.
 - Do not store tokens in webview state, localStorage, or checked-in files. Use VS Code `SecretStorage` only.
 - Do not put workspace filesystem access in webview code.
 - Before adding a dependency, check if VS Code, Svelte, or the existing Open WebUI client patterns already cover it.

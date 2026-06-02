@@ -6,7 +6,17 @@
 		"strict": true,
 		"lib": ["ES2022", "DOM"],
 		"types": ["svelte"],
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"paths": {
+			"$lib/*": ["./vendor/open-webui/*"],
+			"$lib/constants": ["./src/compat/constants.ts"],
+			"$compat": ["./src/compat/index.ts"],
+			"$compat/*": ["./src/compat/*"],
+			"$app/environment": ["./src/compat/sveltekit/environment.ts"],
+			"$app/navigation": ["./src/compat/sveltekit/navigation.ts"],
+			"$app/stores": ["./src/compat/sveltekit/stores.ts"],
+			"$app/state": ["./src/compat/sveltekit/state.ts"]
+		}
 	},
-	"include": ["src/**/*.ts", "src/**/*.svelte"]
+	"include": ["src/**/*.ts", "src/**/*.svelte", "vendor/**/*.ts"]
 }
