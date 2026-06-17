@@ -11,6 +11,7 @@ import { installPlatformBridge } from './platform';
 import { clearToken, hydrateStorageFromHost, hydrateTokenFromHost, persistTokenToHost } from './storage';
 import { installStorageShim } from './storage';
 import { navigateToChat } from './router';
+import { goto } from './sveltekit/navigation';
 import { mobile, showSidebar } from '$lib/stores';
 import {
 	config,
@@ -55,6 +56,20 @@ let socketInstance: Socket | null = null;
 export async function initCompat(): Promise<BootstrapState> {
 	installStorageShim();
 	installPlatformBridge();
+
+	// Intercept internal link clicks to drive compat router navigation
+	window.addEventListener('click', (event) => {
+		const target = event.target as HTMLElement;
+		const anchor = target.closest('a');
+		if (anchor) {
+			const href = anchor.getAttribute('href');
+			if (href && href.startsWith('/')) {
+				event.preventDefault();
+				event.stopPropagation();
+				void goto(href);
+			}
+		}
+	}, true);
 
 	mobile.set(true);
 	showSidebar.set(true);
