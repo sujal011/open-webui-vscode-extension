@@ -74,9 +74,9 @@
 	"scripts": {
 		"build": "npm run sync:ui && npm run build:webview && npm run compile",
 		"build:webview": "vite build",
-		"compile": "tsc -p ./tsconfig.json",
+		"compile": "node scripts/build-extension.mjs",
 		"sync:ui": "node scripts/sync-open-webui-ui.mjs",
-		"watch": "npm run build:webview -- --watch & tsc -watch -p ./tsconfig.json",
+		"watch": "npm run build:webview -- --watch & node scripts/build-extension.mjs --watch",
 		"check": "tsc -p ./tsconfig.json --noEmit && npm run sync:ui && vite build"
 	},
 	"dependencies": {
@@ -191,6 +191,7 @@
 		"@types/node": "^20.11.30",
 		"@types/uuid": "^9.0.8",
 		"@types/vscode": "^1.92.0",
+		"esbuild": "^0.28.1",
 		"postcss": "^8.4.38",
 		"tailwindcss": "^4.0.0",
 		"typescript": "^5.5.4"
